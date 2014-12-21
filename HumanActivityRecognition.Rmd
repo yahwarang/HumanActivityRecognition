@@ -1,0 +1,145 @@
+---
+title: "Human Activity Recognition by Wearable Accelometer"
+author: "Kisun"
+date: "Dec-21-2014"
+output: html_document
+---
+
+
+### Synopsis
+This document is related with analyzing human activities by using data which was collected from wearable acceometers. The activities which are going to be analyzed are 5 types, {Sitting, Sitting down, Standing, Standing up, Walking}. Those are labeled as A..E. 
+
+All analyzing process are done with helping R Caret package, and Random Forest algorithm is used to predict outcomes.
+
+
+### Load Caret
+All processes are done under the assumption `caret` and `corrplot` packages are already installed. 
+```{r}
+library(caret)
+library(corrplot)
+```
+
+### Data Processing
+Data Processing steps are begining with pre-condition that traing & tesing files are exist in local working directory. 
+
+```{r}
+training <- read.csv("pml-training.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+testing <- read.csv("pml-testing.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+```
+Many values are missing, some values are specified as "NA", but mostly as "". For better clarity `na.strings = c("NA", "")` option is used.
+
+There are `r dim(training)[2]` columns in the original training data, but many columns are entirely missing.
+Entirly missing columns are usessless to make prediction, so those are needed to be wiped out. 
+Before clearing NA values in two data frames, we need to make sure whether entirely NA values have same column names or not. 
+
+
+```{r}
+findNAClmns <- function(df) {
+  naClmns <- vector()
+  for (clmnName in colnames(df)) {
+    if(mean(is.na(df[,clmnName])) != 0) naClmns <- c(naClmns, clmnName)
+  }
+  naClmns
+}
+
+setdiff(findNAClmns(training), findNAClmns(testing))
+setdiff(findNAClmns(testing), findNAClmns(training))
+```
+
+Both of two dataFrames have entirely NA values with same column names in common, so it is much better if we clean out those columns. 
+
+```{r}
+training <- training[, colSums(is.na(training)) == 0]
+testing <- testing[, colSums(is.na(testing)) == 0]
+```
+
+
+```{r}
+colnames(training)[1:7]
+colnames(testing)[1:7]
+```
+
+There aren't NA values in columns from 1 to 7 ("X",  "user_name", "raw_timestamp_part_1",  "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window"). But these are not useful in this analyzing. 
+
+We can filter out useless columns.
+```{r}
+training <- training[, -c(1:7)]
+testing <- testing[, -c(1:7)]
+```
+
+After filtering out, we get `r dim(training)[2]` columns. 
+
+Cause we loaded training data with`stringsAsFactors = FALSE`, we need to set training$classe data as factor type (By the way there is no classe column in testing data). 
+```{r}
+training$classe <- as.factor(training$classe)
+```
+
+### preprocess with PCA
+
+When we plot a correlation matrix of the traing data, we can find out there are not a few columns are having higher correlation values each others. 
+
+``` {r}
+corrMat <- cor(training[, -53])
+diag(corrMat) <- 0
+corrplot(corrMat, order="FPC", type="upper")
+```
+
+In this case, using PCA is a good idea to make a compact data set without losing data characteristics.
+
+``` {r}
+set.seed(12345)
+sampleIndex <- createDataPartition(y=training$classe, p = 0.7, list = FALSE)
+training <- training[sampleIndex,]
+validation <- training[-sampleIndex,]
+
+```
+
+Then we apply PCA method.
+``` {r}
+preProc <- preProcess(training[, -53], method = "pca", thresh = 0.99)
+compactTraining <- predict(preProc, training[, -53])
+
+dim(compactTraining)[2]
+```
+
+By doing this, we can shrink the number of columns 53 to 37.
+
+### Training and Cross-Validation
+Even though we use PCA as a pre-process function and the sampled training data, but the training data is so large, so below codes are taking so long time to process. 
+
+In oder to use cross validation method, this analyze uses 4-fold cross validation method by specifying `trControl'. The reason why use 4-fold cross validation is to let the fitting computarion be more quickly.
+
+``` {r}
+modelFit <- train(training$classe ~.,
+                data = compactTraining,
+                method="rf",
+              	trControl = trainControl(method = "cv", number = 4),
+                prox = TRUE,
+                allowParallel = TRUE)
+
+modelFit
+
+```
+
+After we getting a model to predict with, we need to check its accuracy by validating with validation data.
+
+``` {r}
+compactValidation <- predict(preProc, validation[, -53])
+confusionMatrix(predict(modelFit, newdata = compactValidation), validation$classe)
+
+```
+
+It shows very high accuracy, 99.9%, so we can conclude that we have a good model to predict.
+
+
+### Prediction
+
+We apply PCA to the test data, as we do to the training data. 
+Then We run `predcit` method to get predicted results.
+
+``` {r}
+compactTesting <- predict(preProc, testing[, -53])
+predicted <- predict(modelFit, compactTesting)
+print(predicted)
+```
+
